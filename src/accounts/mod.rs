@@ -22,18 +22,26 @@
 //! account.authorize(&env, &action)?;
 //! ```
 
+pub mod batch;
 pub mod classic;
 pub mod contract;
 pub mod error;
+pub mod multi_device;
+pub mod recovery;
+pub mod storage;
 #[cfg(any(test, feature = "testutils"))]
 pub mod testing;
 pub mod traits;
 pub mod types;
 
 // Re-export commonly used items
+pub use batch::BatchBuilder;
 pub use classic::ClassicAccount;
 pub use contract::ContractAccount;
 pub use error::AccountError;
+pub use multi_device::{DeviceKey, DevicePolicy, MultiDeviceProvider};
+pub use recovery::{Guardian, RecoveryConfig, RecoveryProvider, RecoveryRequest};
+pub use storage::SessionStorage;
 #[cfg(any(test, feature = "testutils"))]
 pub use testing::MockAccount;
 pub use traits::{CougrAccount, SessionKeyProvider};

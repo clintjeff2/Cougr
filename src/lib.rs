@@ -15,12 +15,16 @@ pub mod macros;
 
 // Core ECS types adapted for Soroban
 pub mod accounts;
+pub mod change_tracker;
+pub mod commands;
 pub mod component;
 pub mod components;
 pub mod entity;
 pub mod error;
 pub mod event;
 pub mod hooks;
+pub mod observers;
+pub mod plugin;
 pub mod query;
 pub mod resource;
 pub mod scheduler;
@@ -32,12 +36,16 @@ pub mod world;
 pub mod zk;
 
 // Re-export core types
+pub use change_tracker::{ChangeTracker, TrackedWorld};
+pub use commands::CommandQueue;
 pub use component::{Component, ComponentId, ComponentStorage, ComponentTrait};
 pub use components::Position;
 pub use entity::{Entity, EntityId};
 pub use error::{CougrError, CougrResult};
 pub use event::{Event, EventReader, EventWriter};
 pub use hooks::{HookRegistry, HookedWorld};
+pub use observers::{ObservedWorld, ObserverRegistry};
+pub use plugin::{Plugin, PluginApp};
 pub use query::{Query, QueryState, SimpleQueryCache};
 pub use resource::Resource;
 pub use scheduler::{SimpleScheduler, SystemScheduler};

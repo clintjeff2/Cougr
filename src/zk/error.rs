@@ -17,4 +17,8 @@ pub enum ZKError {
     InvalidInput = 14,
     /// The verification key is malformed or incompatible with the proof.
     InvalidVerificationKey = 15,
+    /// The circuit type does not match the expected verification key.
+    CircuitMismatch = 16,
+    /// Public inputs do not match the circuit's expected format.
+    InvalidPublicInput = 17,
 }
