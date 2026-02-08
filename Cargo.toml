@@ -13,6 +13,7 @@ crate-type = ["cdylib", "rlib"]
 
 [features]
 default = []
+debug = []
 hazmat-crypto = ["soroban-sdk/hazmat-crypto"]
 testutils = ["soroban-sdk/testutils"]
 

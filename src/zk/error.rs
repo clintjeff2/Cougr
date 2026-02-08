@@ -21,4 +21,16 @@ pub enum ZKError {
     CircuitMismatch = 16,
     /// Public inputs do not match the circuit's expected format.
     InvalidPublicInput = 17,
+    /// Merkle tree cannot be constructed from empty leaves.
+    EmptyTree = 18,
+    /// Leaf index is out of bounds for the tree.
+    LeafOutOfBounds = 19,
+    /// Merkle proof has invalid length (doesn't match tree depth).
+    InvalidProofLength = 20,
+    /// Merkle inclusion proof verification failed.
+    MerkleVerificationFailed = 21,
+    /// Tree depth exceeds the maximum allowed depth.
+    MaxDepthExceeded = 22,
+    /// Leaf data is invalid or malformed.
+    InvalidLeaf = 23,
 }

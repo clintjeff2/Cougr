@@ -25,6 +25,7 @@ pub mod components;
 pub mod crypto;
 pub mod error;
 pub mod groth16;
+pub mod merkle;
 pub mod systems;
 pub mod testing;
 pub mod types;
@@ -34,6 +35,7 @@ pub use circuits::{CombatCircuit, InventoryCircuit, MovementCircuit, TurnSequenc
 pub use components::{CommitReveal, HiddenState, ProofSubmission, VerifiedMarker};
 pub use error::ZKError;
 pub use groth16::verify_groth16;
+pub use merkle::{verify_inclusion, MerkleProof, MerkleTree, OnChainMerkleProof, SparseMerkleTree};
 pub use systems::{
     cleanup_verified_system, commit_reveal_deadline_system, encode_commit_reveal,
     encode_verified_marker, verify_proofs_system,
