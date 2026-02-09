@@ -73,6 +73,7 @@ pub fn require_capability(
         "session_keys" => capabilities.has_session_keys,
         "batch" => capabilities.can_batch,
         "social_recovery" => capabilities.has_social_recovery,
+        "passkey_auth" => capabilities.has_passkey_auth,
         _ => true, // Unknown capabilities are assumed available
     };
     if supported {
@@ -188,6 +189,7 @@ mod tests {
             can_batch: false,
             has_session_keys: false,
             has_social_recovery: false,
+            has_passkey_auth: false,
         };
         let account = MockAccount::with_capabilities(&env, caps);
         let session = make_session(&env, 5000, 100);
@@ -222,6 +224,7 @@ mod tests {
             can_batch: false,
             has_session_keys: false,
             has_social_recovery: false,
+            has_passkey_auth: false,
         };
         let account = MockAccount::with_capabilities(&env, caps);
         let actions = [make_action(&env, "move"), make_action(&env, "attack")];
@@ -235,6 +238,7 @@ mod tests {
             can_batch: true,
             has_session_keys: true,
             has_social_recovery: true,
+            has_passkey_auth: true,
         };
         assert!(require_capability(&caps, "session_keys").is_ok());
     }
@@ -245,6 +249,7 @@ mod tests {
             can_batch: true,
             has_session_keys: false,
             has_social_recovery: false,
+            has_passkey_auth: false,
         };
         assert_eq!(
             require_capability(&caps, "session_keys").unwrap_err(),
@@ -258,6 +263,7 @@ mod tests {
             can_batch: false,
             has_session_keys: true,
             has_social_recovery: false,
+            has_passkey_auth: false,
         };
         assert_eq!(
             require_capability(&caps, "batch").unwrap_err(),
@@ -271,6 +277,7 @@ mod tests {
             can_batch: false,
             has_session_keys: false,
             has_social_recovery: false,
+            has_passkey_auth: false,
         };
         assert!(require_capability(&caps, "unknown").is_ok());
     }

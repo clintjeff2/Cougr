@@ -26,9 +26,12 @@ pub mod batch;
 pub mod classic;
 pub mod contract;
 pub mod degradation;
+pub mod device_storage;
 pub mod error;
 pub mod multi_device;
 pub mod recovery;
+pub mod recovery_storage;
+pub mod secp256r1_auth;
 pub mod session_builder;
 pub mod storage;
 #[cfg(any(test, feature = "testutils"))]
@@ -41,9 +44,12 @@ pub use batch::BatchBuilder;
 pub use classic::ClassicAccount;
 pub use contract::ContractAccount;
 pub use degradation::{authorize_with_fallback, batch_or_sequential, require_capability};
+pub use device_storage::DeviceStorage;
 pub use error::AccountError;
 pub use multi_device::{DeviceKey, DevicePolicy, MultiDeviceProvider};
 pub use recovery::{Guardian, RecoveryConfig, RecoveryProvider, RecoveryRequest};
+pub use recovery_storage::RecoveryStorage;
+pub use secp256r1_auth::{Secp256r1Key, Secp256r1Storage};
 pub use session_builder::SessionBuilder;
 pub use storage::SessionStorage;
 #[cfg(any(test, feature = "testutils"))]

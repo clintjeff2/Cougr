@@ -29,6 +29,7 @@ impl CougrAccount for ClassicAccount {
             can_batch: false,
             has_session_keys: false,
             has_social_recovery: false,
+            has_passkey_auth: false,
         }
     }
 

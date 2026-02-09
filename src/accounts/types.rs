@@ -34,6 +34,7 @@ pub struct AccountCapabilities {
     pub can_batch: bool,
     pub has_session_keys: bool,
     pub has_social_recovery: bool,
+    pub has_passkey_auth: bool,
 }
 
 /// Authentication method variants.
@@ -78,6 +79,7 @@ mod tests {
             can_batch: true,
             has_session_keys: false,
             has_social_recovery: false,
+            has_passkey_auth: false,
         };
         assert!(caps.can_batch);
         assert!(!caps.has_session_keys);

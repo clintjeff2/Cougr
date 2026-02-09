@@ -133,143 +133,167 @@ fn test_session_storage_multiple_accounts() {
 #[test]
 fn test_recovery_full_flow() {
     let env = Env::default();
+    let contract_id = env.register(TestContract, ());
     let config = RecoveryConfig {
         threshold: 2,
         timelock_period: 0, // no timelock for test
         max_guardians: 5,
     };
     let owner = Address::generate(&env);
-    let mut account = RecoverableAccount::new(owner, config);
 
-    // Add guardians
-    let g1 = Address::generate(&env);
-    let g2 = Address::generate(&env);
-    let g3 = Address::generate(&env);
+    env.as_contract(&contract_id, || {
+        let mut account = RecoverableAccount::new(owner, config, &env);
 
-    account.add_guardian(&env, g1.clone()).unwrap();
-    account.add_guardian(&env, g2.clone()).unwrap();
-    account.add_guardian(&env, g3.clone()).unwrap();
-    assert_eq!(account.guardian_count(), 3);
+        // Add guardians
+        let g1 = Address::generate(&env);
+        let g2 = Address::generate(&env);
+        let g3 = Address::generate(&env);
 
-    // Initiate recovery
-    let new_owner = Address::generate(&env);
-    account.initiate_recovery(&env, new_owner.clone()).unwrap();
+        account.add_guardian(&env, g1.clone()).unwrap();
+        account.add_guardian(&env, g2.clone()).unwrap();
+        account.add_guardian(&env, g3.clone()).unwrap();
+        assert_eq!(account.guardian_count(&env), 3);
 
-    // First approval
-    account.approve_recovery(&env, &g1).unwrap();
+        // Initiate recovery
+        let new_owner = Address::generate(&env);
+        account.initiate_recovery(&env, new_owner.clone()).unwrap();
 
-    // Not enough approvals yet
-    let result = account.execute_recovery(&env);
-    assert!(result.is_err());
+        // First approval
+        account.approve_recovery(&env, &g1).unwrap();
 
-    // Second approval (meets threshold)
-    account.approve_recovery(&env, &g2).unwrap();
+        // Not enough approvals yet
+        let result = account.execute_recovery(&env);
+        assert!(result.is_err());
 
-    // Execute recovery
-    let recovered_owner = account.execute_recovery(&env).unwrap();
-    assert_eq!(recovered_owner, new_owner);
+        // Second approval (meets threshold)
+        account.approve_recovery(&env, &g2).unwrap();
+
+        // Execute recovery
+        let recovered_owner = account.execute_recovery(&env).unwrap();
+        assert_eq!(recovered_owner, new_owner);
+    });
 }
 
 #[test]
 fn test_recovery_cancel() {
     let env = Env::default();
+    let contract_id = env.register(TestContract, ());
     let config = RecoveryConfig {
         threshold: 1,
         timelock_period: 0,
         max_guardians: 3,
     };
     let owner = Address::generate(&env);
-    let mut account = RecoverableAccount::new(owner, config);
 
-    let g1 = Address::generate(&env);
-    account.add_guardian(&env, g1.clone()).unwrap();
+    env.as_contract(&contract_id, || {
+        let mut account = RecoverableAccount::new(owner, config, &env);
 
-    let new_owner = Address::generate(&env);
-    account.initiate_recovery(&env, new_owner).unwrap();
+        let g1 = Address::generate(&env);
+        account.add_guardian(&env, g1.clone()).unwrap();
 
-    // Cancel recovery
-    account.cancel_recovery(&env).unwrap();
+        let new_owner = Address::generate(&env);
+        account.initiate_recovery(&env, new_owner).unwrap();
 
-    // Can't execute cancelled recovery
-    let result = account.execute_recovery(&env);
-    assert!(result.is_err());
+        // Cancel recovery
+        account.cancel_recovery(&env).unwrap();
+
+        // Can't execute cancelled recovery
+        let result = account.execute_recovery(&env);
+        assert!(result.is_err());
+    });
 }
 
 #[test]
 fn test_device_manager_full_lifecycle() {
     let env = Env::default();
+    let contract_id = env.register(TestContract, ());
+    let addr = Address::generate(&env);
     let policy = DevicePolicy {
         max_devices: 3,
         auto_revoke_after: 0,
     };
-    let mut manager = DeviceManager::new(policy);
 
-    // Register devices
-    let k1 = BytesN::from_array(&env, &[1u8; 32]);
-    let k2 = BytesN::from_array(&env, &[2u8; 32]);
-    let k3 = BytesN::from_array(&env, &[3u8; 32]);
+    env.as_contract(&contract_id, || {
+        let mut manager = DeviceManager::new(addr, policy, &env);
 
-    manager
-        .register_device(&env, k1.clone(), symbol_short!("phone"))
-        .unwrap();
-    manager
-        .register_device(&env, k2.clone(), symbol_short!("laptop"))
-        .unwrap();
-    manager
-        .register_device(&env, k3.clone(), symbol_short!("tablet"))
-        .unwrap();
+        // Register devices
+        let k1 = BytesN::from_array(&env, &[1u8; 32]);
+        let k2 = BytesN::from_array(&env, &[2u8; 32]);
+        let k3 = BytesN::from_array(&env, &[3u8; 32]);
 
-    assert_eq!(manager.active_device_count(), 3);
+        manager
+            .register_device(&env, k1.clone(), symbol_short!("phone"))
+            .unwrap();
+        manager
+            .register_device(&env, k2.clone(), symbol_short!("laptop"))
+            .unwrap();
+        manager
+            .register_device(&env, k3.clone(), symbol_short!("tablet"))
+            .unwrap();
 
-    // At limit — should fail
-    let k4 = BytesN::from_array(&env, &[4u8; 32]);
-    let result = manager.register_device(&env, k4, symbol_short!("extra"));
-    assert_eq!(result, Err(AccountError::DeviceLimitReached));
+        assert_eq!(manager.active_device_count(&env), 3);
 
-    // Revoke one
-    manager.revoke_device(&env, &k2).unwrap();
-    assert_eq!(manager.active_device_count(), 2);
+        // At limit — should fail
+        let k4 = BytesN::from_array(&env, &[4u8; 32]);
+        let result = manager.register_device(&env, k4, symbol_short!("extra"));
+        assert_eq!(result, Err(AccountError::DeviceLimitReached));
 
-    // Now can register a new one
-    let k5 = BytesN::from_array(&env, &[5u8; 32]);
-    manager
-        .register_device(&env, k5, symbol_short!("new"))
-        .unwrap();
-    assert_eq!(manager.active_device_count(), 3);
+        // Revoke one
+        manager.revoke_device(&env, &k2).unwrap();
+        assert_eq!(manager.active_device_count(&env), 2);
 
-    // List shows all (including revoked)
-    assert_eq!(manager.list_devices().len(), 4);
+        // Now can register a new one
+        let k5 = BytesN::from_array(&env, &[5u8; 32]);
+        manager
+            .register_device(&env, k5, symbol_short!("new"))
+            .unwrap();
+        assert_eq!(manager.active_device_count(&env), 3);
+
+        // List shows all (including revoked)
+        assert_eq!(manager.list_devices(&env).len(), 4);
+    });
 }
 
 #[test]
 fn test_device_manager_update_last_used() {
     let env = Env::default();
-    let mut manager = DeviceManager::with_defaults();
+    let contract_id = env.register(TestContract, ());
+    let addr = Address::generate(&env);
 
-    let k1 = BytesN::from_array(&env, &[1u8; 32]);
-    manager
-        .register_device(&env, k1.clone(), symbol_short!("phone"))
-        .unwrap();
+    env.as_contract(&contract_id, || {
+        let mut manager = DeviceManager::with_defaults(addr, &env);
 
-    // Update last used
-    manager.update_last_used(&env, &k1).unwrap();
+        let k1 = BytesN::from_array(&env, &[1u8; 32]);
+        manager
+            .register_device(&env, k1.clone(), symbol_short!("phone"))
+            .unwrap();
 
-    // Update non-existent
-    let fake = BytesN::from_array(&env, &[99u8; 32]);
-    let result = manager.update_last_used(&env, &fake);
-    assert_eq!(result, Err(AccountError::DeviceNotFound));
+        // Update last used
+        manager.update_last_used(&env, &k1).unwrap();
+
+        // Update non-existent
+        let fake = BytesN::from_array(&env, &[99u8; 32]);
+        let result = manager.update_last_used(&env, &fake);
+        assert_eq!(result, Err(AccountError::DeviceNotFound));
+    });
 }
 
 #[test]
 fn test_device_manager_policy_change() {
-    let mut manager = DeviceManager::with_defaults();
-    assert_eq!(manager.policy().max_devices, 5);
+    let env = Env::default();
+    let contract_id = env.register(TestContract, ());
+    let addr = Address::generate(&env);
 
-    let new_policy = DevicePolicy {
-        max_devices: 2,
-        auto_revoke_after: 1000,
-    };
-    manager.set_policy(new_policy);
-    assert_eq!(manager.policy().max_devices, 2);
-    assert_eq!(manager.policy().auto_revoke_after, 1000);
+    env.as_contract(&contract_id, || {
+        let mut manager = DeviceManager::with_defaults(addr, &env);
+        assert_eq!(manager.policy(&env).max_devices, 5);
+
+        let new_policy = DevicePolicy {
+            max_devices: 2,
+            auto_revoke_after: 1000,
+        };
+        manager.set_policy(&env, new_policy);
+        assert_eq!(manager.policy(&env).max_devices, 2);
+        assert_eq!(manager.policy(&env).auto_revoke_after, 1000);
+    });
 }

@@ -22,6 +22,7 @@ impl MockAccount {
                 can_batch: true,
                 has_session_keys: true,
                 has_social_recovery: true,
+                has_passkey_auth: true,
             },
         }
     }
@@ -72,6 +73,7 @@ mod tests {
             can_batch: false,
             has_session_keys: false,
             has_social_recovery: true,
+            has_passkey_auth: false,
         };
         let account = MockAccount::with_capabilities(&env, caps);
         let result = account.capabilities();

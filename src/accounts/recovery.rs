@@ -1,7 +1,7 @@
-use alloc::vec::Vec;
-use soroban_sdk::{contracttype, Address, Env};
+use soroban_sdk::{contracttype, Address, Env, Vec};
 
 use super::error::AccountError;
+use super::recovery_storage::RecoveryStorage;
 
 /// A guardian that can participate in account recovery.
 #[contracttype]
@@ -20,7 +20,7 @@ pub struct RecoveryRequest {
     /// The proposed new owner address.
     pub new_owner: Address,
     /// Addresses of guardians that have approved so far.
-    pub approvals: soroban_sdk::Vec<Address>,
+    pub approvals: Vec<Address>,
     /// Ledger timestamp when recovery was initiated.
     pub initiated_at: u64,
     /// Earliest ledger timestamp when recovery can be executed.
@@ -67,32 +67,31 @@ pub trait RecoveryProvider {
     fn execute_recovery(&mut self, env: &Env) -> Result<Address, AccountError>;
 
     /// Returns the number of guardians.
-    fn guardian_count(&self) -> usize;
+    fn guardian_count(&self, env: &Env) -> usize;
 
     /// Returns the recovery configuration.
-    fn recovery_config(&self) -> &RecoveryConfig;
+    fn recovery_config(&self, env: &Env) -> RecoveryConfig;
 }
 
-/// A basic implementation of `RecoveryProvider` for in-memory use.
+/// Persistent implementation of `RecoveryProvider`.
 ///
-/// Guardians and recovery state are stored in memory. For persistent
-/// storage, use Soroban contract storage.
+/// Guardians, config, and recovery state are stored in Soroban persistent
+/// storage via [`RecoveryStorage`], surviving across contract invocations.
 pub struct RecoverableAccount {
     address: Address,
-    guardians: Vec<Guardian>,
-    config: RecoveryConfig,
-    active_request: Option<RecoveryRequest>,
 }
 
 impl RecoverableAccount {
-    /// Create a new recoverable account with the given config.
-    pub fn new(address: Address, config: RecoveryConfig) -> Self {
-        Self {
-            address,
-            guardians: Vec::new(),
-            config,
-            active_request: None,
-        }
+    /// Create a new recoverable account and persist the initial config.
+    pub fn new(address: Address, config: RecoveryConfig, env: &Env) -> Self {
+        RecoveryStorage::store_config(env, &address, &config);
+        RecoveryStorage::store_guardians(env, &address, &Vec::new(env));
+        Self { address }
+    }
+
+    /// Load an existing recoverable account (config must already be stored).
+    pub fn load(address: Address) -> Self {
+        Self { address }
     }
 
     /// Returns the account address.
@@ -101,38 +100,60 @@ impl RecoverableAccount {
     }
 
     /// Returns the active recovery request, if any.
-    pub fn active_request(&self) -> Option<&RecoveryRequest> {
-        self.active_request.as_ref()
+    pub fn active_request(&self, env: &Env) -> Option<RecoveryRequest> {
+        RecoveryStorage::load_request(env, &self.address)
     }
 }
 
 impl RecoveryProvider for RecoverableAccount {
     fn add_guardian(&mut self, env: &Env, guardian: Address) -> Result<(), AccountError> {
+        let config =
+            RecoveryStorage::load_config(env, &self.address).ok_or(AccountError::StorageError)?;
+        let guardians = RecoveryStorage::load_guardians(env, &self.address);
+
         // Check max guardians
-        if self.guardians.len() as u32 >= self.config.max_guardians {
+        if guardians.len() >= config.max_guardians {
             return Err(AccountError::MaxGuardiansReached);
         }
 
         // Check for duplicates
-        for g in &self.guardians {
-            if g.address == guardian {
-                return Err(AccountError::GuardianAlreadyExists);
+        for i in 0..guardians.len() {
+            if let Some(g) = guardians.get(i) {
+                if g.address == guardian {
+                    return Err(AccountError::GuardianAlreadyExists);
+                }
             }
         }
 
-        self.guardians.push(Guardian {
+        let mut new_guardians = guardians;
+        new_guardians.push_back(Guardian {
             address: guardian,
             added_at: env.ledger().timestamp(),
         });
+        RecoveryStorage::store_guardians(env, &self.address, &new_guardians);
         Ok(())
     }
 
-    fn remove_guardian(&mut self, _env: &Env, guardian: &Address) -> Result<(), AccountError> {
-        let initial_len = self.guardians.len();
-        self.guardians.retain(|g| &g.address != guardian);
-        if self.guardians.len() == initial_len {
+    fn remove_guardian(&mut self, env: &Env, guardian: &Address) -> Result<(), AccountError> {
+        let guardians = RecoveryStorage::load_guardians(env, &self.address);
+        let mut new_guardians: Vec<Guardian> = Vec::new(env);
+        let mut found = false;
+
+        for i in 0..guardians.len() {
+            if let Some(g) = guardians.get(i) {
+                if &g.address == guardian {
+                    found = true;
+                } else {
+                    new_guardians.push_back(g);
+                }
+            }
+        }
+
+        if !found {
             return Err(AccountError::InvalidScope);
         }
+
+        RecoveryStorage::store_guardians(env, &self.address, &new_guardians);
         Ok(())
     }
 
@@ -141,26 +162,27 @@ impl RecoveryProvider for RecoverableAccount {
         env: &Env,
         new_owner: Address,
     ) -> Result<RecoveryRequest, AccountError> {
-        if self.active_request.is_some() {
+        if RecoveryStorage::load_request(env, &self.address).is_some() {
             return Err(AccountError::RecoveryAlreadyActive);
         }
+
+        let config =
+            RecoveryStorage::load_config(env, &self.address).ok_or(AccountError::StorageError)?;
 
         let now = env.ledger().timestamp();
         let request = RecoveryRequest {
             new_owner,
-            approvals: soroban_sdk::Vec::new(env),
+            approvals: Vec::new(env),
             initiated_at: now,
-            timelock_until: now + self.config.timelock_period,
+            timelock_until: now + config.timelock_period,
             cancelled: false,
         };
-        self.active_request = Some(request.clone());
+        RecoveryStorage::store_request(env, &self.address, &request);
         Ok(request)
     }
 
-    fn approve_recovery(&mut self, _env: &Env, guardian: &Address) -> Result<(), AccountError> {
-        let request = self
-            .active_request
-            .as_mut()
+    fn approve_recovery(&mut self, env: &Env, guardian: &Address) -> Result<(), AccountError> {
+        let mut request = RecoveryStorage::load_request(env, &self.address)
             .ok_or(AccountError::RecoveryNotInitiated)?;
 
         if request.cancelled {
@@ -168,7 +190,16 @@ impl RecoveryProvider for RecoverableAccount {
         }
 
         // Verify guardian is valid
-        let is_guardian = self.guardians.iter().any(|g| &g.address == guardian);
+        let guardians = RecoveryStorage::load_guardians(env, &self.address);
+        let mut is_guardian = false;
+        for i in 0..guardians.len() {
+            if let Some(g) = guardians.get(i) {
+                if &g.address == guardian {
+                    is_guardian = true;
+                    break;
+                }
+            }
+        }
         if !is_guardian {
             return Err(AccountError::Unauthorized);
         }
@@ -183,24 +214,24 @@ impl RecoveryProvider for RecoverableAccount {
         }
 
         request.approvals.push_back(guardian.clone());
+        RecoveryStorage::store_request(env, &self.address, &request);
         Ok(())
     }
 
-    fn cancel_recovery(&mut self, _env: &Env) -> Result<(), AccountError> {
-        let request = self
-            .active_request
-            .as_mut()
+    fn cancel_recovery(&mut self, env: &Env) -> Result<(), AccountError> {
+        let request = RecoveryStorage::load_request(env, &self.address)
             .ok_or(AccountError::RecoveryNotInitiated)?;
 
-        request.cancelled = true;
-        self.active_request = None;
+        if request.cancelled {
+            return Err(AccountError::RecoveryNotInitiated);
+        }
+
+        RecoveryStorage::remove_request(env, &self.address);
         Ok(())
     }
 
     fn execute_recovery(&mut self, env: &Env) -> Result<Address, AccountError> {
-        let request = self
-            .active_request
-            .as_ref()
+        let request = RecoveryStorage::load_request(env, &self.address)
             .ok_or(AccountError::RecoveryNotInitiated)?;
 
         if request.cancelled {
@@ -208,7 +239,9 @@ impl RecoveryProvider for RecoverableAccount {
         }
 
         // Check threshold
-        if request.approvals.len() < self.config.threshold {
+        let config =
+            RecoveryStorage::load_config(env, &self.address).ok_or(AccountError::StorageError)?;
+        if request.approvals.len() < config.threshold {
             return Err(AccountError::ThresholdNotMet);
         }
 
@@ -220,23 +253,35 @@ impl RecoveryProvider for RecoverableAccount {
 
         let new_owner = request.new_owner.clone();
         self.address = new_owner.clone();
-        self.active_request = None;
+        RecoveryStorage::remove_request(env, &self.address);
         Ok(new_owner)
     }
 
-    fn guardian_count(&self) -> usize {
-        self.guardians.len()
+    fn guardian_count(&self, env: &Env) -> usize {
+        RecoveryStorage::load_guardians(env, &self.address).len() as usize
     }
 
-    fn recovery_config(&self) -> &RecoveryConfig {
-        &self.config
+    fn recovery_config(&self, env: &Env) -> RecoveryConfig {
+        RecoveryStorage::load_config(env, &self.address).unwrap_or(RecoveryConfig {
+            threshold: 0,
+            timelock_period: 0,
+            max_guardians: 0,
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::{testutils::Address as _, Env};
+    use soroban_sdk::{
+        contract, contractimpl, testutils::Address as _, testutils::Ledger as _, Env,
+    };
+
+    #[contract]
+    pub struct TestContract;
+
+    #[contractimpl]
+    impl TestContract {}
 
     fn default_config() -> RecoveryConfig {
         RecoveryConfig {
@@ -249,177 +294,213 @@ mod tests {
     #[test]
     fn test_add_guardian() {
         let env = Env::default();
+        let contract_id = env.register(TestContract, ());
         let addr = Address::generate(&env);
         let guardian = Address::generate(&env);
-        let mut account = RecoverableAccount::new(addr, default_config());
 
-        account.add_guardian(&env, guardian).unwrap();
-        assert_eq!(account.guardian_count(), 1);
+        env.as_contract(&contract_id, || {
+            let mut account = RecoverableAccount::new(addr, default_config(), &env);
+            account.add_guardian(&env, guardian).unwrap();
+            assert_eq!(account.guardian_count(&env), 1);
+        });
     }
 
     #[test]
     fn test_add_duplicate_guardian() {
         let env = Env::default();
+        let contract_id = env.register(TestContract, ());
         let addr = Address::generate(&env);
         let guardian = Address::generate(&env);
-        let mut account = RecoverableAccount::new(addr, default_config());
 
-        account.add_guardian(&env, guardian.clone()).unwrap();
-        let result = account.add_guardian(&env, guardian);
-        assert_eq!(result, Err(AccountError::GuardianAlreadyExists));
+        env.as_contract(&contract_id, || {
+            let mut account = RecoverableAccount::new(addr, default_config(), &env);
+            account.add_guardian(&env, guardian.clone()).unwrap();
+            let result = account.add_guardian(&env, guardian);
+            assert_eq!(result, Err(AccountError::GuardianAlreadyExists));
+        });
     }
 
     #[test]
     fn test_max_guardians() {
         let env = Env::default();
+        let contract_id = env.register(TestContract, ());
         let addr = Address::generate(&env);
         let config = RecoveryConfig {
             threshold: 1,
             timelock_period: 0,
             max_guardians: 2,
         };
-        let mut account = RecoverableAccount::new(addr, config);
 
-        account.add_guardian(&env, Address::generate(&env)).unwrap();
-        account.add_guardian(&env, Address::generate(&env)).unwrap();
-        let result = account.add_guardian(&env, Address::generate(&env));
-        assert_eq!(result, Err(AccountError::MaxGuardiansReached));
+        env.as_contract(&contract_id, || {
+            let mut account = RecoverableAccount::new(addr, config, &env);
+            account.add_guardian(&env, Address::generate(&env)).unwrap();
+            account.add_guardian(&env, Address::generate(&env)).unwrap();
+            let result = account.add_guardian(&env, Address::generate(&env));
+            assert_eq!(result, Err(AccountError::MaxGuardiansReached));
+        });
     }
 
     #[test]
     fn test_remove_guardian() {
         let env = Env::default();
+        let contract_id = env.register(TestContract, ());
         let addr = Address::generate(&env);
         let guardian = Address::generate(&env);
-        let mut account = RecoverableAccount::new(addr, default_config());
 
-        account.add_guardian(&env, guardian.clone()).unwrap();
-        account.remove_guardian(&env, &guardian).unwrap();
-        assert_eq!(account.guardian_count(), 0);
+        env.as_contract(&contract_id, || {
+            let mut account = RecoverableAccount::new(addr, default_config(), &env);
+            account.add_guardian(&env, guardian.clone()).unwrap();
+            account.remove_guardian(&env, &guardian).unwrap();
+            assert_eq!(account.guardian_count(&env), 0);
+        });
     }
 
     #[test]
     fn test_initiate_recovery() {
         let env = Env::default();
+        let contract_id = env.register(TestContract, ());
         let addr = Address::generate(&env);
         let new_owner = Address::generate(&env);
-        let mut account = RecoverableAccount::new(addr, default_config());
 
-        let request = account.initiate_recovery(&env, new_owner).unwrap();
-        assert!(!request.cancelled);
-        assert_eq!(request.approvals.len(), 0);
+        env.as_contract(&contract_id, || {
+            let mut account = RecoverableAccount::new(addr, default_config(), &env);
+            let request = account.initiate_recovery(&env, new_owner).unwrap();
+            assert!(!request.cancelled);
+            assert_eq!(request.approvals.len(), 0);
+        });
     }
 
     #[test]
     fn test_double_initiate_fails() {
         let env = Env::default();
+        let contract_id = env.register(TestContract, ());
         let addr = Address::generate(&env);
-        let mut account = RecoverableAccount::new(addr, default_config());
 
-        account
-            .initiate_recovery(&env, Address::generate(&env))
-            .unwrap();
-        let result = account.initiate_recovery(&env, Address::generate(&env));
-        assert!(matches!(result, Err(AccountError::RecoveryAlreadyActive)));
+        env.as_contract(&contract_id, || {
+            let mut account = RecoverableAccount::new(addr, default_config(), &env);
+            account
+                .initiate_recovery(&env, Address::generate(&env))
+                .unwrap();
+            let result = account.initiate_recovery(&env, Address::generate(&env));
+            assert!(matches!(result, Err(AccountError::RecoveryAlreadyActive)));
+        });
     }
 
     #[test]
     fn test_approve_recovery() {
         let env = Env::default();
+        let contract_id = env.register(TestContract, ());
         let addr = Address::generate(&env);
         let guardian1 = Address::generate(&env);
         let guardian2 = Address::generate(&env);
-        let mut account = RecoverableAccount::new(addr, default_config());
 
-        account.add_guardian(&env, guardian1.clone()).unwrap();
-        account.add_guardian(&env, guardian2.clone()).unwrap();
-        account
-            .initiate_recovery(&env, Address::generate(&env))
-            .unwrap();
+        env.as_contract(&contract_id, || {
+            let mut account = RecoverableAccount::new(addr, default_config(), &env);
+            account.add_guardian(&env, guardian1.clone()).unwrap();
+            account.add_guardian(&env, guardian2.clone()).unwrap();
+            account
+                .initiate_recovery(&env, Address::generate(&env))
+                .unwrap();
 
-        account.approve_recovery(&env, &guardian1).unwrap();
-        account.approve_recovery(&env, &guardian2).unwrap();
+            account.approve_recovery(&env, &guardian1).unwrap();
+            account.approve_recovery(&env, &guardian2).unwrap();
 
-        let request = account.active_request().unwrap();
-        assert_eq!(request.approvals.len(), 2);
+            let request = account.active_request(&env).unwrap();
+            assert_eq!(request.approvals.len(), 2);
+        });
     }
 
     #[test]
     fn test_approve_non_guardian_fails() {
         let env = Env::default();
+        let contract_id = env.register(TestContract, ());
         let addr = Address::generate(&env);
         let non_guardian = Address::generate(&env);
-        let mut account = RecoverableAccount::new(addr, default_config());
 
-        account
-            .initiate_recovery(&env, Address::generate(&env))
-            .unwrap();
+        env.as_contract(&contract_id, || {
+            let mut account = RecoverableAccount::new(addr, default_config(), &env);
+            account
+                .initiate_recovery(&env, Address::generate(&env))
+                .unwrap();
 
-        let result = account.approve_recovery(&env, &non_guardian);
-        assert_eq!(result, Err(AccountError::Unauthorized));
+            let result = account.approve_recovery(&env, &non_guardian);
+            assert_eq!(result, Err(AccountError::Unauthorized));
+        });
     }
 
     #[test]
     fn test_cancel_recovery() {
         let env = Env::default();
+        let contract_id = env.register(TestContract, ());
         let addr = Address::generate(&env);
-        let mut account = RecoverableAccount::new(addr, default_config());
 
-        account
-            .initiate_recovery(&env, Address::generate(&env))
-            .unwrap();
-        account.cancel_recovery(&env).unwrap();
-        assert!(account.active_request().is_none());
+        env.as_contract(&contract_id, || {
+            let mut account = RecoverableAccount::new(addr, default_config(), &env);
+            account
+                .initiate_recovery(&env, Address::generate(&env))
+                .unwrap();
+            account.cancel_recovery(&env).unwrap();
+            assert!(account.active_request(&env).is_none());
+        });
     }
 
     #[test]
     fn test_execute_recovery_threshold_not_met() {
         let env = Env::default();
+        let contract_id = env.register(TestContract, ());
         let addr = Address::generate(&env);
         let guardian1 = Address::generate(&env);
-        let mut account = RecoverableAccount::new(addr, default_config());
 
-        account.add_guardian(&env, guardian1.clone()).unwrap();
-        account
-            .initiate_recovery(&env, Address::generate(&env))
-            .unwrap();
-        account.approve_recovery(&env, &guardian1).unwrap();
+        env.as_contract(&contract_id, || {
+            let mut account = RecoverableAccount::new(addr, default_config(), &env);
+            account.add_guardian(&env, guardian1.clone()).unwrap();
+            account
+                .initiate_recovery(&env, Address::generate(&env))
+                .unwrap();
+            account.approve_recovery(&env, &guardian1).unwrap();
 
-        // Only 1 approval, threshold is 2
-        let result = account.execute_recovery(&env);
-        assert_eq!(result, Err(AccountError::ThresholdNotMet));
+            // Only 1 approval, threshold is 2
+            let result = account.execute_recovery(&env);
+            assert_eq!(result, Err(AccountError::ThresholdNotMet));
+        });
     }
 
     #[test]
     fn test_execute_recovery_timelock() {
         let env = Env::default();
+        let contract_id = env.register(TestContract, ());
         let addr = Address::generate(&env);
         let guardian1 = Address::generate(&env);
         let guardian2 = Address::generate(&env);
-        let mut account = RecoverableAccount::new(addr, default_config());
 
-        account.add_guardian(&env, guardian1.clone()).unwrap();
-        account.add_guardian(&env, guardian2.clone()).unwrap();
-        account
-            .initiate_recovery(&env, Address::generate(&env))
-            .unwrap();
-        account.approve_recovery(&env, &guardian1).unwrap();
-        account.approve_recovery(&env, &guardian2).unwrap();
+        env.as_contract(&contract_id, || {
+            let mut account = RecoverableAccount::new(addr, default_config(), &env);
+            account.add_guardian(&env, guardian1.clone()).unwrap();
+            account.add_guardian(&env, guardian2.clone()).unwrap();
+            account
+                .initiate_recovery(&env, Address::generate(&env))
+                .unwrap();
+            account.approve_recovery(&env, &guardian1).unwrap();
+            account.approve_recovery(&env, &guardian2).unwrap();
 
-        // Timelock not expired (timestamp 0, timelock_until = 100)
-        let result = account.execute_recovery(&env);
-        assert_eq!(result, Err(AccountError::TimelockNotExpired));
+            // Timelock not expired (timestamp 0, timelock_until = 100)
+            let result = account.execute_recovery(&env);
+            assert_eq!(result, Err(AccountError::TimelockNotExpired));
+        });
     }
 
     #[test]
     fn test_recovery_config() {
         let env = Env::default();
+        let contract_id = env.register(TestContract, ());
         let addr = Address::generate(&env);
         let config = default_config();
-        let account = RecoverableAccount::new(addr, config);
 
-        assert_eq!(account.recovery_config().threshold, 2);
-        assert_eq!(account.recovery_config().timelock_period, 100);
-        assert_eq!(account.recovery_config().max_guardians, 5);
+        env.as_contract(&contract_id, || {
+            let account = RecoverableAccount::new(addr, config, &env);
+            assert_eq!(account.recovery_config(&env).threshold, 2);
+            assert_eq!(account.recovery_config(&env).timelock_period, 100);
+            assert_eq!(account.recovery_config(&env).max_guardians, 5);
+        });
     }
 }
