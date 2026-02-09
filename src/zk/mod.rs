@@ -20,13 +20,22 @@
 //! let result = groth16::verify_groth16(&env, &vk, &proof, &public_inputs);
 //! ```
 
+pub mod circuits;
+pub mod components;
 pub mod crypto;
 pub mod error;
 pub mod groth16;
+pub mod systems;
 pub mod testing;
 pub mod types;
 
 // Re-export commonly used items
+pub use circuits::{CombatCircuit, InventoryCircuit, MovementCircuit, TurnSequenceCircuit};
+pub use components::{CommitReveal, HiddenState, ProofSubmission, VerifiedMarker};
 pub use error::ZKError;
 pub use groth16::verify_groth16;
+pub use systems::{
+    cleanup_verified_system, commit_reveal_deadline_system, encode_commit_reveal,
+    encode_verified_marker, verify_proofs_system,
+};
 pub use types::{G1Point, G2Point, Groth16Proof, Scalar, VerificationKey};
